@@ -443,11 +443,11 @@ class MiniCPMO(MiniCPMOPreTrainedModel):
         compiled_modules: list = []
         skipped_modules: list = []
 
-        # if hasattr(self, "vpm") and "vpm" not in skip:
-        #     self.vpm = torch.compile(self.vpm, **compile_kwargs)
-        #     compiled_modules.append("vpm")
-        # elif "vpm" in skip:
-        #     skipped_modules.append("vpm")
+        if hasattr(self, "vpm") and "vpm" not in skip:
+            self.vpm = torch.compile(self.vpm, **compile_kwargs)
+            compiled_modules.append("vpm")
+        elif "vpm" in skip:
+            skipped_modules.append("vpm")
 
         if hasattr(self, "llm") and "llm.model" not in skip:
             self.llm.model = torch.compile(self.llm.model, **compile_kwargs)
@@ -455,11 +455,11 @@ class MiniCPMO(MiniCPMOPreTrainedModel):
         elif "llm.model" in skip:
             skipped_modules.append("llm.model")
 
-        # if hasattr(self, "resampler") and "resampler" not in skip:
-        #     self.resampler = torch.compile(self.resampler, **compile_kwargs)
-        #     compiled_modules.append("resampler")
-        # elif "resampler" in skip:
-        #     skipped_modules.append("resampler")
+        if hasattr(self, "resampler") and "resampler" not in skip:
+            self.resampler = torch.compile(self.resampler, **compile_kwargs)
+            compiled_modules.append("resampler")
+        elif "resampler" in skip:
+            skipped_modules.append("resampler")
 
         if hasattr(self, "tts") and hasattr(self.tts, "model") and "tts.model" not in skip:
             self.tts.model = torch.compile(self.tts.model, **compile_kwargs)
@@ -495,6 +495,20 @@ class MiniCPMO(MiniCPMOPreTrainedModel):
 
         swapped: list = []
 
+        if hasattr(self, "vpm"):
+            cur = self.vpm
+            if enabled:
+                compiled = getattr(cur, "_compiled_ref", None)
+                if compiled is not None:
+                    self.vpm = compiled
+                    swapped.append("vpm")
+            else:
+                orig = getattr(cur, "_orig_mod", None)
+                if orig is not None:
+                    orig._compiled_ref = cur
+                    self.vpm = orig
+                    swapped.append("vpm")
+
         if hasattr(self, "llm"):
             cur = self.llm.model
             if enabled:
@@ -508,6 +522,20 @@ class MiniCPMO(MiniCPMOPreTrainedModel):
                     orig._compiled_ref = cur
                     self.llm.model = orig
                     swapped.append("llm.model")
+
+        if hasattr(self, "resampler"):
+            cur = self.resampler
+            if enabled:
+                compiled = getattr(cur, "_compiled_ref", None)
+                if compiled is not None:
+                    self.resampler = compiled
+                    swapped.append("resampler")
+            else:
+                orig = getattr(cur, "_orig_mod", None)
+                if orig is not None:
+                    orig._compiled_ref = cur
+                    self.resampler = orig
+                    swapped.append("resampler")
 
         if hasattr(self, "tts") and hasattr(self.tts, "model"):
             cur = self.tts.model
