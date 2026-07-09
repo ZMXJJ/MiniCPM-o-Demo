@@ -31,6 +31,26 @@ from py_backend.chat_util import (
     parse_worker_chat_request_message,
 )
 
+# --- long-term memory integration (opt-in via MINICPM_MEMORY_ENABLED=1) ---
+# All helpers are no-ops unless memory is enabled, so upstream behaviour is unchanged
+# by default. If the package is not installed, fall back to no-op stubs.
+try:
+    from minicpm_memory.integration import (
+        augment_duplex_system_prompt,
+        inject_memory,
+        remember_turn,
+    )
+except Exception:  # pragma: no cover - stub path when minicpm_memory is absent
+
+    def inject_memory(model_msgs, *, session_id):  # type: ignore
+        return None
+
+    def remember_turn(user_text, assistant_text, *, session_id):  # type: ignore
+        return None
+
+    def augment_duplex_system_prompt(base_prompt, *, session_id, query=None):  # type: ignore
+        return base_prompt
+
 
 logger = logging.getLogger("backend_server")
 
@@ -260,13 +280,18 @@ class BackendProtocolSession:
             ),
         )
         try:
+            base_system_prompt = _coalesce(
+                params.get("system_prompt"),
+                params.get("instructions"),
+                default="You are a helpful assistant.",
+            )
+            # memory: prepend long-term memory to the duplex system prompt (no-op unless enabled)
+            base_system_prompt = augment_duplex_system_prompt(
+                base_system_prompt, session_id=self.session_id
+            )
             await asyncio.to_thread(
                 self.backend.duplex_prepare,
-                system_prompt_text=_coalesce(
-                    params.get("system_prompt"),
-                    params.get("instructions"),
-                    default="You are a helpful assistant.",
-                ),
+                system_prompt_text=base_system_prompt,
                 ref_audio_path=refs.llm_ref_audio_path,
                 prompt_wav_path=refs.tts_ref_audio_path,
                 length_penalty=float(config.get("length_penalty", 1.1) if config else 1.1),
@@ -284,6 +309,10 @@ class BackendProtocolSession:
             messages = parse_raw_messages(request.messages)
             model_msgs = convert_to_model_msgs(messages)
 
+            # memory: retrieve relevant history and inject as a system message
+            # (no-op unless enabled). Returns the user text for a later store.
+            memory_user_text = inject_memory(model_msgs, session_id=self.session_id)
+
             await asyncio.to_thread(
                 self.backend.chat_prefill,
                 session_id=self.session_id,
@@ -298,9 +327,12 @@ class BackendProtocolSession:
                 await asyncio.to_thread(self.backend.chat_init_tts, request.tts_ref_audio)
 
             if request.streaming:
-                await self._stream_turn_based(request, response_id=response_id, input_id=input_id)
+                assistant_text = await self._stream_turn_based(request, response_id=response_id, input_id=input_id)
             else:
-                await self._non_stream_turn_based(request, response_id=response_id, input_id=input_id)
+                assistant_text = await self._non_stream_turn_based(request, response_id=response_id, input_id=input_id)
+
+            # memory: store the completed turn (no-op unless enabled)
+            remember_turn(memory_user_text or "", assistant_text or "", session_id=self.session_id)
 
     async def _stream_turn_based(self, request: Any, *, response_id: str, input_id: Optional[str]) -> None:
         queue: asyncio.Queue = asyncio.Queue()
@@ -353,7 +385,7 @@ class BackendProtocolSession:
                         reason="turn_end",
                         metrics=self._safe_metrics(),
                     )
-                    return
+                    return full_text
                 if tag == "error":
                     raise payload
         finally:
@@ -392,6 +424,7 @@ class BackendProtocolSession:
             reason="turn_end",
             metrics=self._safe_metrics(),
         )
+        return text or ""
 
     async def _push_full_duplex(self, payload: Dict[str, Any]) -> None:
         async with self._op_lock:

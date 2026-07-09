@@ -2703,6 +2703,11 @@ class MiniCPMO(MiniCPMOPreTrainedModel):
             return False
         if not self._drop_tokens_from_cache(total_len, cache):
             return False
+        # memory: capture decoded text of the round being evicted from the window,
+        # so it can be promoted to mid-term memory before it is lost. Opt-in: only
+        # runs if an external hook was attached to this model instance.
+        eviction_hook = getattr(self, "_memory_eviction_hook", None)
+        evicted_texts = []
         for e in entries:
             logger.info(
                 "Dropped round=%s chunk type=%s len=%s decoded=%s",
@@ -2711,7 +2716,16 @@ class MiniCPMO(MiniCPMOPreTrainedModel):
                 e["length"],
                 e.get("decoded"),
             )
+            if eviction_hook is not None:
+                decoded = e.get("decoded")
+                if decoded:
+                    evicted_texts.append(decoded)
             self._omni_chunk_history.remove(e)
+        if eviction_hook is not None and evicted_texts:
+            try:
+                eviction_hook(round_id=round_id, texts=evicted_texts)
+            except Exception:  # noqa: BLE001 - memory must never break inference
+                logger.exception("memory eviction hook failed for round=%s", round_id)
         return True
 
     def _enforce_text_window(self) -> None:

@@ -1,0 +1,16 @@
+# 记忆层依赖（在 MiniCPM-o-Demo 现有依赖之外额外安装）
+#
+#   pip install -r minicpm_memory/requirements.txt
+#
+# 零外部 API：PowerMem 的 LLM 只指向本地 shim；默认 embedder 需 pyseekdb，
+# 本集成不安装它，本地测试用 embedder=mock，生产用本地 embedding 服务。
+
+powermem>=1.1.7
+fastapi>=0.100.0
+uvicorn>=0.27.1
+httpx>=0.24.0
+
+# 测试
+pytest>=8.0
+pytest-asyncio>=0.23
+pytest-mock>=3.14
